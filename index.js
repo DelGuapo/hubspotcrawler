@@ -11,12 +11,21 @@ const hubspotClient = new hubspot.Client({
 
 /**
  * Main audit function
+ * @param {Object} options - Configuration options
+ * @param {number} options.unusedFieldsDays - Number of days to consider fields unused (default: 90)
+ * @param {string} options.outputFile - Output file name (default: 'audit-report.json')
  */
-async function auditHubSpot() {
+async function auditHubSpot(options = {}) {
+  const unusedFieldsDays = options.unusedFieldsDays || 90;
+  const outputFile = options.outputFile || 'audit-report.json';
   console.log('Starting HubSpot Audit...\n');
+  console.log(`Configuration: Checking for unused fields not updated in ${unusedFieldsDays} days\n`);
   
   const report = {
     timestamp: new Date().toISOString(),
+    configuration: {
+      unusedFieldsDays: unusedFieldsDays
+    },
     workflows: [],
     properties: {
       contact: [],
@@ -45,8 +54,8 @@ async function auditHubSpot() {
     report.properties.company = await fetchCustomProperties('companies');
     
     // 3. Detect unused fields
-    console.log('3. Detecting unused fields...');
-    report.unusedFields = await detectUnusedFields(report.properties);
+    console.log(`3. Detecting unused fields (${unusedFieldsDays}+ days)...`);
+    report.unusedFields = await detectUnusedFields(report.properties, unusedFieldsDays);
     
     // 4. Scan NetSuite integration dependencies
     console.log('4. Scanning NetSuite integration dependencies...');
@@ -64,7 +73,6 @@ async function auditHubSpot() {
     );
     
     // Write report to file
-    const outputFile = 'audit-report.json';
     fs.writeFileSync(outputFile, JSON.stringify(report, null, 2));
     console.log(`\n✓ Audit complete! Report saved to ${outputFile}`);
     
@@ -161,18 +169,20 @@ async function fetchCustomProperties(objectType) {
 }
 
 /**
- * Detect unused fields (no updates in 90 days)
+ * Detect unused fields (no updates in specified number of days)
+ * @param {Object} properties - Properties object with contact, deal, company arrays
+ * @param {number} unusedFieldsDays - Number of days to consider fields unused (default: 90)
  */
-async function detectUnusedFields(properties) {
+async function detectUnusedFields(properties, unusedFieldsDays = 90) {
   const unusedFields = [];
-  const ninetyDaysAgo = new Date();
-  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+  const thresholdDate = new Date();
+  thresholdDate.setDate(thresholdDate.getDate() - unusedFieldsDays);
   
   for (const objectType of ['contact', 'deal', 'company']) {
     for (const prop of properties[objectType]) {
       try {
         // Check if property has been used recently via search
-        const searchResult = await checkPropertyUsage(objectType, prop.name, ninetyDaysAgo);
+        const searchResult = await checkPropertyUsage(objectType, prop.name, thresholdDate);
         
         if (!searchResult.hasRecentActivity) {
           unusedFields.push({
@@ -187,7 +197,7 @@ async function detectUnusedFields(properties) {
         // If we can't check usage, assume it might be unused
         if (prop.updatedAt) {
           const lastUpdate = new Date(prop.updatedAt);
-          if (lastUpdate < ninetyDaysAgo) {
+          if (lastUpdate < thresholdDate) {
             unusedFields.push({
               objectType,
               propertyName: prop.name,
@@ -619,8 +629,93 @@ function generateMockProperties(objectType) {
   return baseProperties[objectType] || [];
 }
 
+/**
+ * Display help information
+ */
+function displayHelp() {
+  console.log(`
+HubSpot Audit Tool - Analyze workflows, properties, and integrations
+
+USAGE:
+  node index.js [options]
+  npm start -- [options]
+
+OPTIONS:
+  --days <number>        Number of days to check for unused fields (default: 90)
+                         Use lower values to see more granular trends
+                         Examples: --days 30, --days 60, --days 180
+
+  --output <filename>    Output file name (default: audit-report.json)
+                         Example: --output my-audit.json
+
+  --help, -h            Display this help message
+
+EXAMPLES:
+  # Run audit with default settings (90 days)
+  node index.js
+
+  # Check for fields unused in last 30 days
+  node index.js --days 30
+
+  # Check for fields unused in last 180 days with custom output
+  node index.js --days 180 --output long-term-audit.json
+
+GETTING STARTED:
+  1. Make sure you have a .env file with your HUBSPOT_API_KEY
+  2. Run: node index.js
+  3. Check the generated audit-report.json file
+
+For more information, see README.md
+`);
+}
+
+/**
+ * Parse command line arguments
+ */
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const options = {
+    unusedFieldsDays: 90,
+    outputFile: 'audit-report.json'
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    
+    if (arg === '--help' || arg === '-h') {
+      displayHelp();
+      process.exit(0);
+    } else if (arg === '--days') {
+      const days = parseInt(args[++i], 10);
+      if (isNaN(days) || days <= 0) {
+        console.error('Error: --days must be a positive number');
+        process.exit(1);
+      }
+      options.unusedFieldsDays = days;
+    } else if (arg === '--output') {
+      options.outputFile = args[++i];
+      if (!options.outputFile) {
+        console.error('Error: --output requires a filename');
+        process.exit(1);
+      }
+    } else {
+      console.error(`Error: Unknown option '${arg}'`);
+      console.error('Use --help to see available options');
+      process.exit(1);
+    }
+  }
+
+  return options;
+}
+
 // Run the audit if this script is executed directly
 if (require.main === module) {
+  // Check for help flag first
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    displayHelp();
+    process.exit(0);
+  }
+
   if (!process.env.HUBSPOT_API_KEY) {
     console.error('Error: HUBSPOT_API_KEY not found in environment variables.');
     console.error('Please create a .env file with your HubSpot API key.');
@@ -629,10 +724,13 @@ if (require.main === module) {
     console.error('HUBSPOT_API_KEY=your_hubspot_api_key_here');
     console.error('');
     console.error('See .env.example for a template.\n');
+    console.error('Run "node index.js --help" for usage information.');
     process.exit(1);
   }
   
-  auditHubSpot().catch(error => {
+  const options = parseArgs();
+  
+  auditHubSpot(options).catch(error => {
     console.error('Fatal error:', error);
     process.exit(1);
   });
