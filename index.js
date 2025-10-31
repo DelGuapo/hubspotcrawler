@@ -330,12 +330,22 @@ async function testNetSuiteEndpoints() {
 }
 
 /**
+ * Mask sensitive string for display (shows first and last 4 characters)
+ */
+function maskSensitiveString(str) {
+  if (!str || str === 'not configured' || str.length <= 8) {
+    return str;
+  }
+  return `${str.substring(0, 4)}****${str.substring(str.length - 4)}`;
+}
+
+/**
  * Print summary of the NetSuite audit
  */
 function printNetSuiteSummary(report) {
   console.log('\n========== NETSUITE AUDIT SUMMARY ==========');
   console.log(`Connection Status: ${report.connection.status.toUpperCase()}`);
-  console.log(`Account ID: ${report.connection.accountId}`);
+  console.log(`Account ID: ${maskSensitiveString(report.connection.accountId)}`);
   
   if (report.connection.status === 'success') {
     console.log(`\n✓ Successfully connected to NetSuite`);
