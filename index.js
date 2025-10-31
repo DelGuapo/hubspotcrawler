@@ -137,7 +137,7 @@ async function fetchCustomProperties(objectType) {
     const response = await hubspotClient.crm.properties.coreApi.getAll(objectType);
     
     for (const prop of response.results || []) {
-      if (prop.type === 'string' || prop.createdUserId) { // Custom properties
+      if (prop.createdUserId) { // Custom properties (created by users)
         properties.push({
           name: prop.name,
           label: prop.label,
@@ -231,7 +231,12 @@ async function checkPropertyUsage(objectType, propertyName, sinceDate) {
       company: 'companies'
     };
     
-    const response = await hubspotClient.crm.contacts.searchApi.doSearch(searchRequest);
+    const apiObjectType = objectTypeMap[objectType];
+    if (!apiObjectType) {
+      throw new Error(`Unknown object type: ${objectType}`);
+    }
+    
+    const response = await hubspotClient.crm[apiObjectType].searchApi.doSearch(searchRequest);
     
     if (response.results && response.results.length > 0) {
       const lastModified = new Date(response.results[0].properties.hs_lastmodifieddate);
@@ -619,7 +624,11 @@ if (require.main === module) {
   if (!process.env.HUBSPOT_API_KEY) {
     console.error('Error: HUBSPOT_API_KEY not found in environment variables.');
     console.error('Please create a .env file with your HubSpot API key.');
-    console.error('See .env.example for the required format.\n');
+    console.error('');
+    console.error('Example .env file content:');
+    console.error('HUBSPOT_API_KEY=your_hubspot_api_key_here');
+    console.error('');
+    console.error('See .env.example for a template.\n');
     process.exit(1);
   }
   
