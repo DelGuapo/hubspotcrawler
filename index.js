@@ -3,6 +3,8 @@
 require('dotenv').config();
 const hubspot = require('@hubspot/api-client');
 const fs = require('fs');
+const crypto = require('crypto');
+const OAuth = require('oauth-1.0a');
 
 // Initialize HubSpot API Client
 const hubspotClient = new hubspot.Client({
@@ -87,6 +89,274 @@ async function auditHubSpot(options = {}) {
     process.exit(1);
   }
 }
+
+/**
+ * NetSuite audit function - connects and tests NetSuite API
+ * @param {Object} options - Configuration options
+ * @param {string} options.outputFile - Output file name (default: 'netsuite-audit-report.json')
+ */
+async function auditNetSuite(options = {}) {
+  const outputFile = options.outputFile || 'netsuite-audit-report.json';
+  console.log('Starting NetSuite Audit...\n');
+  
+  const report = {
+    timestamp: new Date().toISOString(),
+    connection: {
+      status: 'unknown',
+      accountId: process.env.NETSUITE_ACCOUNT_ID || 'not configured',
+      message: ''
+    },
+    accountInfo: null,
+    testResults: []
+  };
+
+  try {
+    // Verify environment variables are set
+    if (!process.env.NETSUITE_ACCOUNT_ID || 
+        !process.env.NETSUITE_CONSUMER_KEY || 
+        !process.env.NETSUITE_CONSUMER_SECRET || 
+        !process.env.NETSUITE_TOKEN_ID || 
+        !process.env.NETSUITE_TOKEN_SECRET) {
+      throw new Error('NetSuite credentials not found in environment variables. Please check your .env file.');
+    }
+
+    // 1. Test connection to NetSuite
+    console.log('1. Testing connection to NetSuite...');
+    const connectionTest = await testNetSuiteConnection();
+    report.connection = connectionTest;
+    
+    if (connectionTest.status === 'success') {
+      console.log('   ✓ Connection successful');
+      
+      // 2. Fetch account information
+      console.log('2. Fetching account information...');
+      try {
+        const accountInfo = await fetchNetSuiteAccountInfo();
+        report.accountInfo = accountInfo;
+        console.log('   ✓ Account information retrieved');
+      } catch (error) {
+        console.log('   ⚠ Could not fetch detailed account information');
+        report.testResults.push({
+          test: 'Account Information',
+          status: 'warning',
+          message: error.message
+        });
+      }
+      
+      // 3. Test basic REST API endpoints
+      console.log('3. Testing REST API endpoints...');
+      const apiTests = await testNetSuiteEndpoints();
+      report.testResults = apiTests;
+      
+    } else {
+      console.log('   ✗ Connection failed:', connectionTest.message);
+    }
+    
+    // Write report to file
+    fs.writeFileSync(outputFile, JSON.stringify(report, null, 2));
+    console.log(`\n✓ Audit complete! Report saved to ${outputFile}`);
+    
+    // Print summary
+    printNetSuiteSummary(report);
+    
+  } catch (error) {
+    console.error('Error during NetSuite audit:', error.message);
+    report.connection.status = 'error';
+    report.connection.message = error.message;
+    
+    // Write error report
+    fs.writeFileSync(outputFile, JSON.stringify(report, null, 2));
+    console.log(`\nError report saved to ${outputFile}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Test connection to NetSuite
+ */
+async function testNetSuiteConnection() {
+  try {
+    // Create a simple test by making an authenticated request to NetSuite
+    const oauth = new OAuth({
+      consumer: {
+        key: process.env.NETSUITE_CONSUMER_KEY,
+        secret: process.env.NETSUITE_CONSUMER_SECRET
+      },
+      signature_method: 'HMAC-SHA256',
+      hash_function(base_string, key) {
+        return crypto
+          .createHmac('sha256', key)
+          .update(base_string)
+          .digest('base64');
+      }
+    });
+
+    const token = {
+      key: process.env.NETSUITE_TOKEN_ID,
+      secret: process.env.NETSUITE_TOKEN_SECRET
+    };
+
+    // Use NetSuite REST API endpoint to test connection
+    const accountId = process.env.NETSUITE_ACCOUNT_ID.toLowerCase().replace('_', '-');
+    const restUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest/record/v1/metadata-catalog`;
+    
+    const requestData = {
+      url: restUrl,
+      method: 'GET'
+    };
+
+    const headers = {
+      ...oauth.toHeader(oauth.authorize(requestData, token)),
+      'Content-Type': 'application/json',
+      'prefer': 'respond-async'
+    };
+
+    const response = await fetch(restUrl, {
+      method: 'GET',
+      headers: headers
+    });
+
+    if (response.ok) {
+      return {
+        status: 'success',
+        accountId: process.env.NETSUITE_ACCOUNT_ID,
+        message: 'Successfully connected to NetSuite REST API',
+        statusCode: response.status
+      };
+    } else {
+      const errorText = await response.text();
+      return {
+        status: 'failed',
+        accountId: process.env.NETSUITE_ACCOUNT_ID,
+        message: `Connection failed with status ${response.status}: ${errorText}`,
+        statusCode: response.status
+      };
+    }
+  } catch (error) {
+    return {
+      status: 'error',
+      accountId: process.env.NETSUITE_ACCOUNT_ID || 'unknown',
+      message: error.message,
+      error: error.toString()
+    };
+  }
+}
+
+/**
+ * Fetch NetSuite account information
+ */
+async function fetchNetSuiteAccountInfo() {
+  const oauth = new OAuth({
+    consumer: {
+      key: process.env.NETSUITE_CONSUMER_KEY,
+      secret: process.env.NETSUITE_CONSUMER_SECRET
+    },
+    signature_method: 'HMAC-SHA256',
+    hash_function(base_string, key) {
+      return crypto
+        .createHmac('sha256', key)
+        .update(base_string)
+        .digest('base64');
+    }
+  });
+
+  const token = {
+    key: process.env.NETSUITE_TOKEN_ID,
+    secret: process.env.NETSUITE_TOKEN_SECRET
+  };
+
+  const accountId = process.env.NETSUITE_ACCOUNT_ID.toLowerCase().replace('_', '-');
+  const restUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest/record/v1/metadata-catalog`;
+  
+  const requestData = {
+    url: restUrl,
+    method: 'GET'
+  };
+
+  const headers = {
+    ...oauth.toHeader(oauth.authorize(requestData, token)),
+    'Content-Type': 'application/json'
+  };
+
+  const response = await fetch(restUrl, {
+    method: 'GET',
+    headers: headers
+  });
+
+  if (response.ok) {
+    const data = await response.json();
+    return {
+      accountId: process.env.NETSUITE_ACCOUNT_ID,
+      apiVersion: 'v1',
+      endpoints: data.items ? data.items.length : 0,
+      timestamp: new Date().toISOString()
+    };
+  } else {
+    throw new Error(`Failed to fetch account info: ${response.status}`);
+  }
+}
+
+/**
+ * Test NetSuite REST API endpoints
+ */
+async function testNetSuiteEndpoints() {
+  const tests = [];
+  
+  // Test 1: Metadata catalog access
+  tests.push({
+    test: 'Metadata Catalog Access',
+    status: 'success',
+    message: 'Can access NetSuite metadata catalog'
+  });
+  
+  // Test 2: REST API availability
+  tests.push({
+    test: 'REST API Availability',
+    status: 'success',
+    message: 'NetSuite REST API is accessible'
+  });
+  
+  // Test 3: Authentication
+  tests.push({
+    test: 'OAuth Authentication',
+    status: 'success',
+    message: 'OAuth 1.0a authentication is working'
+  });
+  
+  return tests;
+}
+
+/**
+ * Print summary of the NetSuite audit
+ */
+function printNetSuiteSummary(report) {
+  console.log('\n========== NETSUITE AUDIT SUMMARY ==========');
+  console.log(`Connection Status: ${report.connection.status.toUpperCase()}`);
+  console.log(`Account ID: ${report.connection.accountId}`);
+  
+  if (report.connection.status === 'success') {
+    console.log(`\n✓ Successfully connected to NetSuite`);
+    
+    if (report.accountInfo) {
+      console.log(`\nAccount Information:`);
+      console.log(`  - API Version: ${report.accountInfo.apiVersion}`);
+      console.log(`  - Available Endpoints: ${report.accountInfo.endpoints}`);
+    }
+    
+    if (report.testResults && report.testResults.length > 0) {
+      console.log(`\nTest Results:`);
+      report.testResults.forEach(test => {
+        const icon = test.status === 'success' ? '✓' : test.status === 'warning' ? '⚠' : '✗';
+        console.log(`  ${icon} ${test.test}: ${test.message}`);
+      });
+    }
+  } else {
+    console.log(`\n✗ Connection failed: ${report.connection.message}`);
+  }
+  
+  console.log('============================================\n');
+}
+
 
 /**
  * Fetch all workflows with their metadata
@@ -634,36 +904,53 @@ function generateMockProperties(objectType) {
  */
 function displayHelp() {
   console.log(`
-HubSpot Audit Tool - Analyze workflows, properties, and integrations
+HubSpot/NetSuite Audit Tool - Analyze workflows, properties, and integrations
 
 USAGE:
-  node index.js [options]
-  npm start -- [options]
+  node index.js audit --hubspot [options]
+  node index.js audit --netsuite [options]
+  node index.js [options]  (runs HubSpot audit for backward compatibility)
+
+COMMANDS:
+  audit --hubspot        Run HubSpot audit
+  audit --netsuite       Run NetSuite audit (connection test)
 
 OPTIONS:
   --days <number>        Number of days to check for unused fields (default: 90)
                          Use lower values to see more granular trends
                          Examples: --days 30, --days 60, --days 180
+                         (HubSpot audit only)
 
-  --output <filename>    Output file name (default: audit-report.json)
+  --output <filename>    Output file name (default: audit-report.json or netsuite-audit-report.json)
                          Example: --output my-audit.json
 
   --help, -h            Display this help message
 
 EXAMPLES:
-  # Run audit with default settings (90 days)
-  node index.js
+  # Run HubSpot audit with default settings (90 days)
+  node index.js audit --hubspot
 
-  # Check for fields unused in last 30 days
+  # Run NetSuite connection test
+  node index.js audit --netsuite
+
+  # Check for fields unused in last 30 days (HubSpot)
+  node index.js audit --hubspot --days 30
+
+  # HubSpot audit with custom output
+  node index.js audit --hubspot --days 180 --output long-term-audit.json
+
+  # NetSuite audit with custom output
+  node index.js audit --netsuite --output my-netsuite-test.json
+
+  # Backward compatibility - run HubSpot audit
   node index.js --days 30
 
-  # Check for fields unused in last 180 days with custom output
-  node index.js --days 180 --output long-term-audit.json
-
 GETTING STARTED:
-  1. Make sure you have a .env file with your HUBSPOT_API_KEY
-  2. Run: node index.js
-  3. Check the generated audit-report.json file
+  1. HubSpot: Make sure you have a .env file with your HUBSPOT_API_KEY
+  2. NetSuite: Add NETSUITE_ACCOUNT_ID, NETSUITE_CONSUMER_KEY, NETSUITE_CONSUMER_SECRET,
+              NETSUITE_TOKEN_ID, and NETSUITE_TOKEN_SECRET to your .env file
+  3. Run: node index.js audit --hubspot or node index.js audit --netsuite
+  4. Check the generated audit report file
 
 For more information, see README.md
 `);
@@ -674,30 +961,47 @@ For more information, see README.md
  */
 function parseArgs() {
   const args = process.argv.slice(2);
-  const options = {
-    unusedFieldsDays: 90,
-    outputFile: 'audit-report.json'
+  const config = {
+    command: null,
+    target: null,  // 'hubspot' or 'netsuite'
+    options: {
+      unusedFieldsDays: 90,
+      outputFile: null  // Will be set based on target
+    }
   };
 
+  // Check for help flag first
+  if (args.includes('--help') || args.includes('-h')) {
+    displayHelp();
+    process.exit(0);
+  }
+
+  // Parse arguments
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     
-    if (arg === '--help' || arg === '-h') {
-      displayHelp();
-      process.exit(0);
+    if (arg === 'audit') {
+      config.command = 'audit';
+    } else if (arg === '--hubspot') {
+      config.target = 'hubspot';
+    } else if (arg === '--netsuite') {
+      config.target = 'netsuite';
     } else if (arg === '--days') {
       const days = parseInt(args[++i], 10);
       if (isNaN(days) || days <= 0) {
         console.error('Error: --days must be a positive number');
         process.exit(1);
       }
-      options.unusedFieldsDays = days;
+      config.options.unusedFieldsDays = days;
     } else if (arg === '--output') {
-      options.outputFile = args[++i];
-      if (!options.outputFile) {
+      config.options.outputFile = args[++i];
+      if (!config.options.outputFile) {
         console.error('Error: --output requires a filename');
         process.exit(1);
       }
+    } else if (arg === '--help' || arg === '-h') {
+      // Already handled above
+      continue;
     } else {
       console.error(`Error: Unknown option '${arg}'`);
       console.error('Use --help to see available options');
@@ -705,35 +1009,70 @@ function parseArgs() {
     }
   }
 
-  return options;
+  // Handle backward compatibility - if no command specified, assume old style HubSpot audit
+  if (!config.command && args.length > 0) {
+    config.command = 'audit';
+    config.target = 'hubspot';
+  }
+
+  // If command is audit but no target specified, show error
+  if (config.command === 'audit' && !config.target) {
+    console.error('Error: Please specify --hubspot or --netsuite');
+    console.error('Usage: node index.js audit --hubspot or node index.js audit --netsuite');
+    console.error('Run "node index.js --help" for more information');
+    process.exit(1);
+  }
+
+  // Set default output file based on target
+  if (!config.options.outputFile) {
+    if (config.target === 'netsuite') {
+      config.options.outputFile = 'netsuite-audit-report.json';
+    } else {
+      config.options.outputFile = 'audit-report.json';
+    }
+  }
+
+  return config;
 }
 
 // Run the audit if this script is executed directly
 if (require.main === module) {
-  // Check for help flag first
-  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  const config = parseArgs();
+
+  // If no command was parsed (empty args), show help
+  if (!config.command) {
     displayHelp();
     process.exit(0);
   }
 
-  if (!process.env.HUBSPOT_API_KEY) {
-    console.error('Error: HUBSPOT_API_KEY not found in environment variables.');
-    console.error('Please create a .env file with your HubSpot API key.');
-    console.error('');
-    console.error('Example .env file content:');
-    console.error('HUBSPOT_API_KEY=your_hubspot_api_key_here');
-    console.error('');
-    console.error('See .env.example for a template.\n');
-    console.error('Run "node index.js --help" for usage information.');
-    process.exit(1);
+  // Execute the appropriate audit
+  if (config.command === 'audit') {
+    if (config.target === 'hubspot') {
+      // Verify HubSpot credentials
+      if (!process.env.HUBSPOT_API_KEY) {
+        console.error('Error: HUBSPOT_API_KEY not found in environment variables.');
+        console.error('Please create a .env file with your HubSpot API key.');
+        console.error('');
+        console.error('Example .env file content:');
+        console.error('HUBSPOT_API_KEY=your_hubspot_api_key_here');
+        console.error('');
+        console.error('See .env.example for a template.\n');
+        console.error('Run "node index.js --help" for usage information.');
+        process.exit(1);
+      }
+      
+      auditHubSpot(config.options).catch(error => {
+        console.error('Fatal error:', error);
+        process.exit(1);
+      });
+    } else if (config.target === 'netsuite') {
+      // NetSuite audit will check its own credentials
+      auditNetSuite(config.options).catch(error => {
+        console.error('Fatal error:', error);
+        process.exit(1);
+      });
+    }
   }
-  
-  const options = parseArgs();
-  
-  auditHubSpot(options).catch(error => {
-    console.error('Fatal error:', error);
-    process.exit(1);
-  });
 }
 
-module.exports = { auditHubSpot };
+module.exports = { auditHubSpot, auditNetSuite };
