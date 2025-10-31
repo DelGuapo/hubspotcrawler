@@ -6,6 +6,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const OAuth = require('oauth-1.0a');
 
+// Note: This script requires Node.js 18+ for native fetch API support
 // Initialize HubSpot API Client
 const hubspotClient = new hubspot.Client({
   accessToken: process.env.HUBSPOT_API_KEY
@@ -146,7 +147,7 @@ async function auditNetSuite(options = {}) {
       // 3. Test basic REST API endpoints
       console.log('3. Testing REST API endpoints...');
       const apiTests = await testNetSuiteEndpoints();
-      report.testResults = apiTests;
+      report.testResults.push(...apiTests);
       
     } else {
       console.log('   ✗ Connection failed:', connectionTest.message);
@@ -204,7 +205,11 @@ function getNetSuiteToken() {
  * Transform NetSuite account ID to REST API format
  */
 function formatNetSuiteAccountId() {
-  return process.env.NETSUITE_ACCOUNT_ID.toLowerCase().replace('_', '-');
+  const accountId = process.env.NETSUITE_ACCOUNT_ID;
+  if (!accountId) {
+    throw new Error('NETSUITE_ACCOUNT_ID environment variable is not set');
+  }
+  return accountId.toLowerCase().replace('_', '-');
 }
 
 /**
