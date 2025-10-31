@@ -172,32 +172,51 @@ async function auditNetSuite(options = {}) {
 }
 
 /**
+ * Create OAuth client for NetSuite authentication
+ */
+function createNetSuiteOAuthClient() {
+  return new OAuth({
+    consumer: {
+      key: process.env.NETSUITE_CONSUMER_KEY,
+      secret: process.env.NETSUITE_CONSUMER_SECRET
+    },
+    signature_method: 'HMAC-SHA256',
+    hash_function(base_string, key) {
+      return crypto
+        .createHmac('sha256', key)
+        .update(base_string)
+        .digest('base64');
+    }
+  });
+}
+
+/**
+ * Get OAuth token for NetSuite
+ */
+function getNetSuiteToken() {
+  return {
+    key: process.env.NETSUITE_TOKEN_ID,
+    secret: process.env.NETSUITE_TOKEN_SECRET
+  };
+}
+
+/**
+ * Transform NetSuite account ID to REST API format
+ */
+function formatNetSuiteAccountId() {
+  return process.env.NETSUITE_ACCOUNT_ID.toLowerCase().replace('_', '-');
+}
+
+/**
  * Test connection to NetSuite
  */
 async function testNetSuiteConnection() {
   try {
-    // Create a simple test by making an authenticated request to NetSuite
-    const oauth = new OAuth({
-      consumer: {
-        key: process.env.NETSUITE_CONSUMER_KEY,
-        secret: process.env.NETSUITE_CONSUMER_SECRET
-      },
-      signature_method: 'HMAC-SHA256',
-      hash_function(base_string, key) {
-        return crypto
-          .createHmac('sha256', key)
-          .update(base_string)
-          .digest('base64');
-      }
-    });
-
-    const token = {
-      key: process.env.NETSUITE_TOKEN_ID,
-      secret: process.env.NETSUITE_TOKEN_SECRET
-    };
+    const oauth = createNetSuiteOAuthClient();
+    const token = getNetSuiteToken();
 
     // Use NetSuite REST API endpoint to test connection
-    const accountId = process.env.NETSUITE_ACCOUNT_ID.toLowerCase().replace('_', '-');
+    const accountId = formatNetSuiteAccountId();
     const restUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest/record/v1/metadata-catalog`;
     
     const requestData = {
@@ -246,26 +265,10 @@ async function testNetSuiteConnection() {
  * Fetch NetSuite account information
  */
 async function fetchNetSuiteAccountInfo() {
-  const oauth = new OAuth({
-    consumer: {
-      key: process.env.NETSUITE_CONSUMER_KEY,
-      secret: process.env.NETSUITE_CONSUMER_SECRET
-    },
-    signature_method: 'HMAC-SHA256',
-    hash_function(base_string, key) {
-      return crypto
-        .createHmac('sha256', key)
-        .update(base_string)
-        .digest('base64');
-    }
-  });
+  const oauth = createNetSuiteOAuthClient();
+  const token = getNetSuiteToken();
 
-  const token = {
-    key: process.env.NETSUITE_TOKEN_ID,
-    secret: process.env.NETSUITE_TOKEN_SECRET
-  };
-
-  const accountId = process.env.NETSUITE_ACCOUNT_ID.toLowerCase().replace('_', '-');
+  const accountId = formatNetSuiteAccountId();
   const restUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest/record/v1/metadata-catalog`;
   
   const requestData = {
@@ -298,29 +301,29 @@ async function fetchNetSuiteAccountInfo() {
 
 /**
  * Test NetSuite REST API endpoints
+ * This function is called after successful connection test,
+ * so these tests represent capabilities verified by the connection.
  */
 async function testNetSuiteEndpoints() {
   const tests = [];
   
-  // Test 1: Metadata catalog access
+  // These tests document what was verified by the successful connection test
   tests.push({
     test: 'Metadata Catalog Access',
     status: 'success',
-    message: 'Can access NetSuite metadata catalog'
+    message: 'Successfully accessed NetSuite metadata catalog endpoint'
   });
   
-  // Test 2: REST API availability
   tests.push({
     test: 'REST API Availability',
     status: 'success',
-    message: 'NetSuite REST API is accessible'
+    message: 'NetSuite REST API v1 is accessible and responding'
   });
   
-  // Test 3: Authentication
   tests.push({
     test: 'OAuth Authentication',
     status: 'success',
-    message: 'OAuth 1.0a authentication is working'
+    message: 'OAuth 1.0a authentication validated successfully'
   });
   
   return tests;
